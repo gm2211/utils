@@ -1,0 +1,4 @@
+include 'scala'
+include 'java'
+
+rootProject.name = 'utils'

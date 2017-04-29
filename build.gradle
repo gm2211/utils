@@ -1,0 +1,20 @@
+plugins {
+      id "nebula.dependency-recommender" version "4.1.2"
+}
+
+apply plugin: 'idea'
+apply plugin: 'nebula.dependency-recommender'
+
+repositories {
+    jcenter()
+}
+
+dependencyRecommendations {
+       propertiesFile file: 'versions.props'
+}
+
+dependencies {
+    compile "org.slf4j:slf4j-api"
+
+    testCompile "junit:junit"
+}
