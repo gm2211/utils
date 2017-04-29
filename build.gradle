@@ -10,11 +10,5 @@ repositories {
 }
 
 dependencyRecommendations {
-       propertiesFile file: 'versions.props'
-}
-
-dependencies {
-    compile "org.slf4j:slf4j-api"
-
-    testCompile "junit:junit"
+       propertiesFile file: project.rootProject.file('versions.props')
 }
