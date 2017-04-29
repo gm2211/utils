@@ -2,13 +2,22 @@ plugins {
       id "nebula.dependency-recommender" version "4.1.2"
 }
 
-apply plugin: 'idea'
-apply plugin: 'nebula.dependency-recommender'
 
-repositories {
-    jcenter()
-}
+allprojects {
+    apply plugin: 'idea'
+    apply plugin: 'nebula.dependency-recommender'
 
-dependencyRecommendations {
-       propertiesFile file: project.rootProject.file('versions.props')
+    repositories {
+        jcenter()
+    }
+
+    dependencyRecommendations {
+        propertiesFile file: project.rootProject.file('versions.props')
+    }
+
+    configurations.all {
+        resolutionStrategy {
+            failOnVersionConflict()
+        }
+    }
 }
