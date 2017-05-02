@@ -43,22 +43,21 @@ class SuffixTree {
   }
 
   def longestPrefixLen(string: String): Option[(Int, List[Int])] = {
-    val initialValue: (Int, Node) = (0, Node('$', children = rootIdsByChar))
+    var len = 0
+    var curNode = Node('$', children = rootIdsByChar)
 
-    val (maxLen, lastNode): (Int, Node) = string.scanLeft(initialValue) {
-      // Try to continue matching string character from the current node
-      case ((len, node), char) if node.children.contains(char) => (len + 1, nodesById(node.children(char)))
-      // Stop if there are still characters in the string but no child was matched in the previous iteration
-      case _ => (-1, Node('$'))
-    }.takeWhile{ case (len, _) => len >= 0 }
-     .last
-
-    if (maxLen > 0) {
-      val startIndices = lastNode.indices.map(_ + 1 - maxLen)
-      Some((maxLen, startIndices.toList))
-    } else {
-      None
+    scala.util.control.Breaks.breakable {
+      for (curChar <- string) {
+        if (curNode.children.contains(curChar)) {
+          len += 1
+          curNode = nodesById(curNode.children(curChar))
+        } else {
+          scala.util.control.Breaks.break
+        }
+      }
     }
+
+    if (len > 0) Some(len, curNode.indices.toList) else None
   }
 
   def find(string: String): List[Int] = {
