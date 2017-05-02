@@ -1,6 +1,12 @@
 apply plugin: 'scala'
 
 dependencies {
-    compile "org.scala-lang:scala-library:2.12.2"
-    testCompile "junit:junit"
+    configurations.all {
+        resolutionStrategy {
+            force "org.scala-lang:scala-library:2.12.2"
+        }
+    }
+
+    compile "org.scala-lang:scala-library"
+    testCompile "org.scalatest:scalatest_2.12"
 }
