@@ -36,7 +36,7 @@ final class ListBasedStackSpec extends FlatSpec {
     assert(stack.nonEmpty)
     assert(!stack.empty)
   }
-  
+
   it should "be empty after popping all items" in {
     val stack = Stack[Int]()
 
