@@ -1,12 +1,19 @@
+apply plugin: 'idea'
 apply plugin: 'scala'
+apply plugin: 'nebula.dependency-recommender'
 
 repositories {
+    jcenter()
     mavenCentral()
 }
 
 dependencies {
     compile "org.scala-lang:scala-library"
     testCompile "org.scalactic:scalactic"
-    testCompile "org.scalatest:scalatest_2.11"
+    testCompile "org.scalatest:scalatest_2.12"
     testCompile "junit:junit"
+}
+
+dependencyRecommendations {
+    propertiesFile file: project.rootProject.file('versions.props')
 }

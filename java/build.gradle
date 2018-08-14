@@ -1,6 +1,12 @@
+apply plugin: 'idea'
 apply plugin: 'java'
+apply plugin: 'nebula.dependency-recommender'
 
 dependencies {
     compile "org.slf4j:slf4j-api"
     testCompile "junit:junit"
+}
+
+dependencyRecommendations {
+    propertiesFile file: project.rootProject.file('versions.props')
 }

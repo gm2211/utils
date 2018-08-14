@@ -2,7 +2,6 @@ package com.gm2211.debug
 
 class PrintExtensions {
   implicit class PrettyPrintable(obj: Any) {
-
     def prettyPrint(depth: Int = 0): String = {
       val stringBuilder = new StringBuffer()
       val tabs = "\t" * depth
