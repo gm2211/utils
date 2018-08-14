@@ -3,6 +3,8 @@ plugins {
 }
 
 apply plugin: 'idea'
+apply plugin: 'scala'
+apply plugin: 'idea'
 apply plugin: 'nebula.dependency-recommender'
 
 repositories {
