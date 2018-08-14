@@ -1,3 +1,5 @@
-org.scala-lang = 2.12.2
+org.scala-lang = 2.12.6
+org.scalactic = 3.0.5
+org.scalatest = 3.0.5
 org.slf4j = 1.7.25
 junit = 4.12
