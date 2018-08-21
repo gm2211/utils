@@ -9,6 +9,9 @@ repositories {
 
 dependencies {
     compile "org.scala-lang:scala-library"
+    compile "org.scala-lang:scala-reflect"
+
+    compile "org.yaml:snakeyaml"
     testCompile "org.scalactic:scalactic"
     testCompile "org.scalatest:scalatest_2.12"
     testCompile "junit:junit"

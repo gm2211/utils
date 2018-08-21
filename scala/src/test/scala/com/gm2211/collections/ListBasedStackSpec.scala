@@ -1,8 +1,6 @@
 package com.gm2211.collections
 
-import org.scalatest.FlatSpec
-
-final class ListBasedStackSpec extends FlatSpec {
+final class ListBasedStackSpec extends BaseSpec {
 
   "An empty stack" should "return empty" in {
     val stack = Stack[Int]()
