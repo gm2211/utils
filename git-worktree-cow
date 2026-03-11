@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+#
+# git-worktree-cow: git worktree using copy-on-write
+#
+# Drop this script on your PATH (or symlink it) to get the command:
+#   git worktree-cow <subcommand> [options]
+#
+# The "add" subcommand creates a new worktree by CoW-copying the current
+# working tree (cp --reflink=auto), then rewires git metadata so the copy
+# becomes a proper linked worktree sharing the same object store.
+#
+# Every other subcommand is forwarded to "git worktree" unchanged.
+#
+set -euo pipefail
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+die() { printf 'fatal: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+
+usage() {
+    cat <<'EOF'
+usage: git worktree-cow add [-f] [--detach] [--lock [--reason <string>]]
+                            [(-b | -B) <new-branch>] <path> [<commit-ish>]
+       git worktree-cow list [-v | --porcelain [-z]]
+       git worktree-cow lock [--reason <string>] <worktree>
+       git worktree-cow move <worktree> <new-path>
+       git worktree-cow prune [-n] [-v] [--expire <expire>]
+       git worktree-cow remove [-f] <worktree>
+       git worktree-cow repair [<path>...]
+       git worktree-cow unlock <worktree>
+
+The "add" subcommand uses copy-on-write (reflink) cloning for speed.
+All other subcommands are forwarded to "git worktree".
+EOF
+    exit "${1:-0}"
+}
+
+# Resolve the absolute path to the main repository's .git directory
+# (handles both regular repos and when run from inside a worktree).
+resolve_git_common_dir() {
+    git rev-parse --git-common-dir 2>/dev/null \
+        || die "not a git repository (or any parent up to mount point /)"
+}
+
+resolve_toplevel() {
+    git rev-parse --show-toplevel 2>/dev/null \
+        || die "not inside a git working tree"
+}
+
+# Turn a possibly-relative path into an absolute one without requiring the
+# target to exist (so we cannot use realpath/readlink -f).
+make_absolute() {
+    local p="$1"
+    if [[ "$p" != /* ]]; then
+        p="$PWD/$p"
+    fi
+    # Normalise . and .. components
+    python3 -c "import os,sys; print(os.path.normpath(sys.argv[1]))" "$p" 2>/dev/null \
+        || echo "$p"   # fallback: return un-normalised
+}
+
+# ── "add" implementation ──────────────────────────────────────────────────────
+
+cmd_add() {
+    # -- Parse arguments -------------------------------------------------------
+    local new_branch=""
+    local force=false
+    local detach=false
+    local lock=false
+    local lock_reason=""
+    local dest_path=""
+    local commitish=""
+    local force_branch=false   # -B (force-create branch)
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)       usage 0 ;;
+            -f|--force)      force=true;  shift ;;
+            --detach)        detach=true; shift ;;
+            --lock)          lock=true;   shift ;;
+            --reason)        lock_reason="$2"; shift 2 ;;
+            -b)              new_branch="$2";  shift 2 ;;
+            -B)              new_branch="$2"; force_branch=true; shift 2 ;;
+            --)              shift; break ;;
+            -*)              die "unknown option: $1" ;;
+            *)               break ;;
+        esac
+    done
+
+    # Positional: <path> [<commit-ish>]
+    [[ $# -ge 1 ]] || { usage 1; }
+    dest_path="$1"; shift
+    commitish="${1:-}"
+
+    dest_path="$(make_absolute "$dest_path")"
+
+    # -- Validate --------------------------------------------------------------
+    local src_toplevel
+    src_toplevel="$(resolve_toplevel)"
+    local git_common_dir
+    git_common_dir="$(make_absolute "$(resolve_git_common_dir)")"
+
+    if [[ -e "$dest_path" ]] && [[ "$force" != true ]]; then
+        die "'$dest_path' already exists. Use -f to override."
+    fi
+
+    # Derive a short name for the worktree entry (basename of dest)
+    local wt_name
+    wt_name="$(basename "$dest_path")"
+
+    local wt_admin_dir="$git_common_dir/worktrees/$wt_name"
+    if [[ -d "$wt_admin_dir" ]]; then
+        # Try appending a counter to avoid collisions
+        local i=1
+        while [[ -d "${wt_admin_dir}_${i}" ]]; do ((i++)); done
+        wt_name="${wt_name}_${i}"
+        wt_admin_dir="$git_common_dir/worktrees/$wt_name"
+    fi
+
+    # Figure out which commit / branch to check out in the new worktree.
+    local target_ref=""
+    local target_commit=""
+
+    if [[ -n "$new_branch" ]]; then
+        # -b / -B: create a new branch at commitish (or HEAD)
+        target_commit="$(git rev-parse --verify "${commitish:-HEAD}" 2>/dev/null)" \
+            || die "bad revision: '${commitish:-HEAD}'"
+        if [[ "$force_branch" == true ]]; then
+            git branch -f "$new_branch" "$target_commit"
+        else
+            git branch "$new_branch" "$target_commit"
+        fi
+        target_ref="refs/heads/$new_branch"
+    elif [[ -n "$commitish" ]]; then
+        # Might be a branch name or arbitrary commit
+        if git show-ref --verify --quiet "refs/heads/$commitish" 2>/dev/null; then
+            target_ref="refs/heads/$commitish"
+            target_commit="$(git rev-parse "refs/heads/$commitish")"
+        else
+            target_commit="$(git rev-parse --verify "$commitish" 2>/dev/null)" \
+                || die "bad revision: '$commitish'"
+            detach=true
+        fi
+    fi
+    # If still empty, we stay on whatever the source has — will fixup later.
+
+    # -- Step 1: CoW copy the working tree ------------------------------------
+    printf 'Copying worktree (reflink/CoW) to %s …\n' "$dest_path"
+
+    if [[ -e "$dest_path" ]]; then
+        rm -rf "$dest_path"
+    fi
+
+    cp --reflink=auto -a "$src_toplevel" "$dest_path"
+
+    # -- Step 2: Wire up git metadata -----------------------------------------
+    # Remove the copied .git (dir or file) from the destination.
+    rm -rf "$dest_path/.git"
+
+    # Create the admin dir in the main repo.
+    mkdir -p "$wt_admin_dir"
+
+    # .git file in the worktree → points to admin dir
+    printf 'gitdir: %s\n' "$wt_admin_dir" > "$dest_path/.git"
+
+    # Admin dir entries
+    printf '%s/.git\n' "$dest_path"          > "$wt_admin_dir/gitdir"
+    printf '../..\n'                         > "$wt_admin_dir/commondir"
+
+    # HEAD — detached or symbolic ref
+    if [[ "$detach" == true ]] && [[ -n "$target_commit" ]]; then
+        printf '%s\n' "$target_commit"       > "$wt_admin_dir/HEAD"
+    elif [[ -n "$target_ref" ]]; then
+        printf 'ref: %s\n' "$target_ref"     > "$wt_admin_dir/HEAD"
+    else
+        # Same HEAD as the source worktree
+        cp "$git_common_dir/HEAD" "$wt_admin_dir/HEAD" 2>/dev/null \
+            || printf 'ref: refs/heads/main\n' > "$wt_admin_dir/HEAD"
+    fi
+
+    # -- Step 3: Reset the index to match the target commit --------------------
+    # If a different commit was requested, we need to check out those files.
+    if [[ -n "$target_commit" ]]; then
+        local src_commit
+        src_commit="$(git -C "$src_toplevel" rev-parse HEAD 2>/dev/null || true)"
+
+        if [[ "$target_commit" != "$src_commit" ]]; then
+            # Different commit — do a proper checkout in the new worktree
+            printf 'Checking out %s …\n' "${target_ref:-$target_commit}"
+            git -C "$dest_path" checkout -f "${target_ref:-$target_commit}" -- . 2>/dev/null \
+                || git -C "$dest_path" reset --hard "$target_commit" 2>/dev/null \
+                || warn "could not checkout target; worktree has source's files"
+        else
+            # Same commit — just refresh the index
+            git -C "$dest_path" reset 2>/dev/null || true
+        fi
+    else
+        # No explicit target — refresh the index for the copied files
+        git -C "$dest_path" reset 2>/dev/null || true
+    fi
+
+    # -- Step 4: Optional lock -------------------------------------------------
+    if [[ "$lock" == true ]]; then
+        if [[ -n "$lock_reason" ]]; then
+            printf '%s\n' "$lock_reason"     > "$wt_admin_dir/locked"
+        else
+            touch "$wt_admin_dir/locked"
+        fi
+    fi
+
+    # -- Done ------------------------------------------------------------------
+    local head_desc
+    head_desc="$(git -C "$dest_path" describe --always --dirty 2>/dev/null || echo "unknown")"
+    printf 'Worktree ready at %s (%s)\n' "$dest_path" "$head_desc"
+}
+
+# ── Main dispatch ─────────────────────────────────────────────────────────────
+
+[[ $# -ge 1 ]] || usage 1
+
+subcmd="$1"; shift
+
+case "$subcmd" in
+    add)
+        cmd_add "$@"
+        ;;
+    -h|--help|help)
+        usage 0
+        ;;
+    # Everything else → plain git worktree
+    list|lock|move|prune|remove|repair|unlock)
+        exec git worktree "$subcmd" "$@"
+        ;;
+    *)
+        die "unknown subcommand: $subcmd"
+        ;;
+esac
